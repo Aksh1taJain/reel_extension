@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Instagram Reels Enhancer",
+  "version": "1.0.0",
+  "description": "Enhance Instagram web reels with speed controls, scrub bar, and full desktop mode.",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["*://www.instagram.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
