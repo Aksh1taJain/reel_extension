@@ -1,298 +1,524 @@
 /* ========================================================
-   Instagram Reels Enhancer — Content Script
-   Manifest V3 | Vanilla JS | No frameworks
+   Instagram Reels Enhancer — Content Script v2
+   Manifest V3 | Vanilla JS | Fixed pointer events & seeking
    ======================================================== */
 
 (() => {
   'use strict';
 
-  /* ── Constants ─────────────────────────────────────── */
-  const SPEEDS = [1, 1.5, 2, 2.5, 3, 5];
-  const CTRL_CLASS = 'ire-controls';
-  const WRAPPER_CLASS = 'ire-video-wrapper';
+  /* ─────────────────────────────────────────────────────
+     Constants & State
+  ───────────────────────────────────────────────────── */
+  const SPEEDS      = [1, 1.5, 2, 2.5, 3, 5];
+  const CTRL_CLASS  = 'ire-controls';
+  const WRAP_CLASS  = 'ire-video-wrapper';
   const STORAGE_KEY = 'ire_speed';
 
-  /* ── State ──────────────────────────────────────────── */
-  let currentSpeed = 1;
-  let activeControllers = new WeakMap(); // video el → controller obj
-  let mutationObserver = null;
+  let currentSpeed   = 1;
+  const enhancedSet  = new WeakSet();   // videos already wrapped
+  const listenerSet  = new WeakSet();   // videos already have timeupdate/speed listeners
+  let domObserver    = null;
+  let scanTimer      = null;
 
-  /* ── Restore saved speed from chrome.storage ────────── */
-  chrome.storage.local.get(STORAGE_KEY, (result) => {
-    if (result[STORAGE_KEY]) {
-      currentSpeed = result[STORAGE_KEY];
-    }
+  /* ─────────────────────────────────────────────────────
+     Boot: restore saved speed then initialise
+  ───────────────────────────────────────────────────── */
+  chrome.storage.local.get(STORAGE_KEY, (res) => {
+    if (res[STORAGE_KEY]) currentSpeed = res[STORAGE_KEY];
     init();
   });
 
-  /* ── Main init ─────────────────────────────────────── */
+  /* ─────────────────────────────────────────────────────
+     getActiveVideo()
+     Returns the video element most visible in the viewport.
+     Never caches the result — always queries live DOM.
+  ───────────────────────────────────────────────────── */
+  function getActiveVideo() {
+    const videos = Array.from(document.querySelectorAll('video'));
+    if (!videos.length) return null;
+
+    let best = null;
+    let bestRatio = 0;
+
+    for (const v of videos) {
+      // Skip invisible or tiny videos (story thumbnails, ads, etc.)
+      if (v.offsetWidth < 80 || v.offsetHeight < 80) continue;
+      if (getComputedStyle(v).display === 'none') continue;
+
+      const rect  = v.getBoundingClientRect();
+      const vpW   = window.innerWidth;
+      const vpH   = window.innerHeight;
+
+      // Intersection area with viewport
+      const ix = Math.max(0, Math.min(rect.right, vpW)  - Math.max(rect.left, 0));
+      const iy = Math.max(0, Math.min(rect.bottom, vpH) - Math.max(rect.top, 0));
+      const intersect = ix * iy;
+      const area      = rect.width * rect.height;
+      const ratio     = area > 0 ? intersect / area : 0;
+
+      if (ratio > bestRatio) {
+        bestRatio = ratio;
+        best = v;
+      }
+    }
+
+    if (best) console.log('[IRE] Video found:', best, `visibility=${(bestRatio*100).toFixed(1)}%`);
+    return best;
+  }
+
+  /* ─────────────────────────────────────────────────────
+     init
+  ───────────────────────────────────────────────────── */
   function init() {
     scanAndEnhance();
     observeDOM();
     observeNavigation();
+    // PiP state sync (user may close PiP window externally)
+    document.addEventListener('leavepictureinpicture', syncPipButtons);
   }
 
-  /* ── Scan for reel videos and enhance them ─────────── */
+  /* ─────────────────────────────────────────────────────
+     scanAndEnhance — wrap every qualifying video
+  ───────────────────────────────────────────────────── */
   function scanAndEnhance() {
-    // Instagram reels videos: typically inside <article> or a clips container
-    const videos = document.querySelectorAll('video');
-    videos.forEach(tryEnhance);
+    document.querySelectorAll('video').forEach(tryEnhance);
+    // After wrapping, attach playback listeners to the active video
+    attachListeners(getActiveVideo());
   }
 
-  /* ── Enhance a single video element ────────────────── */
+  /* ─────────────────────────────────────────────────────
+     tryEnhance — wrap one video with controls overlay
+  ───────────────────────────────────────────────────── */
   function tryEnhance(video) {
-    // Skip if already enhanced
-    if (activeControllers.has(video)) return;
+    if (enhancedSet.has(video)) return;
+    if (video.offsetWidth < 80 || video.offsetHeight < 80) return;
 
-    // Skip tiny / non-reel videos (e.g. story thumbnails < 100px)
-    if (video.offsetWidth < 100 && video.offsetHeight < 100) return;
-
-    // Wrap and inject controls
     const wrapper = ensureWrapper(video);
     if (!wrapper) return;
 
-    const controller = buildControls(video, wrapper);
-    activeControllers.set(video, controller);
-
-    // Apply remembered speed
-    safeSetSpeed(video, currentSpeed);
+    buildControls(video, wrapper);
+    enhancedSet.add(video);
   }
 
-  /* ── Wrap video in a positioned container ───────────── */
+  /* ─────────────────────────────────────────────────────
+     ensureWrapper — surround video in a positioned div
+  ───────────────────────────────────────────────────── */
   function ensureWrapper(video) {
     try {
       const parent = video.parentElement;
       if (!parent) return null;
+      if (parent.classList.contains(WRAP_CLASS)) return parent;
 
-      // Already wrapped
-      if (parent.classList.contains(WRAPPER_CLASS)) return parent;
-
-      const wrapper = document.createElement('div');
-      wrapper.className = WRAPPER_CLASS;
-
-      // Match parent's sizing constraints
-      const cs = getComputedStyle(parent);
-      wrapper.style.width = '100%';
-      wrapper.style.height = cs.height !== 'auto' ? cs.height : '100%';
-      wrapper.style.position = 'relative';
+      const wrapper      = document.createElement('div');
+      wrapper.className  = WRAP_CLASS;
+      // Match computed size of parent so layout doesn't break
+      wrapper.style.cssText = `
+        width:100%; height:100%;
+        position:relative; display:block;
+        pointer-events:none;
+      `;
 
       parent.insertBefore(wrapper, video);
       wrapper.appendChild(video);
       return wrapper;
     } catch (e) {
-      console.warn('[IRE] wrapper error', e);
+      console.warn('[IRE] ensureWrapper error', e);
       return null;
     }
   }
 
-  /* ── Build and inject the controls overlay ──────────── */
+  /* ─────────────────────────────────────────────────────
+     buildControls — inject scrub bar + speed + PiP
+  ───────────────────────────────────────────────────── */
   function buildControls(video, wrapper) {
-    const controls = document.createElement('div');
-    controls.className = CTRL_CLASS;
 
-    /* — Scrub bar — */
-    const scrubRow = document.createElement('div');
-    scrubRow.className = 'ire-scrub-row';
+    // Only create one floating panel
+    if(document.querySelector("." + CTRL_CLASS))
+        return;
 
-    const track = document.createElement('div');
-    track.className = 'ire-scrub-track';
+    const controls=document.createElement("div");
+    controls.className=CTRL_CLASS;
 
-    const fill = document.createElement('div');
-    fill.className = 'ire-scrub-fill';
+    /* ----- SCRUB ----- */
 
-    const thumb = document.createElement('div');
-    thumb.className = 'ire-scrub-thumb';
+    const scrubRow=document.createElement("div");
+    scrubRow.className="ire-scrub-row";
 
-    track.appendChild(fill);
-    track.appendChild(thumb);
+    const track=document.createElement("div");
+    track.className="ire-scrub-track";
 
-    const timeLabel = document.createElement('span');
-    timeLabel.className = 'ire-time';
-    timeLabel.textContent = '0:00 / 0:00';
+    const visual=document.createElement("div");
+    visual.className="ire-scrub-visual";
+
+    const fill=document.createElement("div");
+    fill.className="ire-scrub-fill";
+
+    const thumb=document.createElement("div");
+    thumb.className="ire-scrub-thumb";
+
+    visual.appendChild(fill);
+    visual.appendChild(thumb);
+
+    track.appendChild(visual);
+
+    const timeLabel=document.createElement("span");
+    timeLabel.className="ire-time";
+    timeLabel.textContent="0:00 / 0:00";
 
     scrubRow.appendChild(track);
     scrubRow.appendChild(timeLabel);
 
-    /* — Speed buttons — */
-    const speedRow = document.createElement('div');
-    speedRow.className = 'ire-speed-row';
+    /* ----- SPEED ----- */
 
-    const label = document.createElement('span');
-    label.className = 'ire-speed-label';
-    label.textContent = 'Speed';
-    speedRow.appendChild(label);
+    const speedRow=document.createElement("div");
+    speedRow.className="ire-speed-row";
 
-    const speedBtns = SPEEDS.map(speed => {
-      const btn = document.createElement('button');
-      btn.className = 'ire-speed-btn';
-      btn.textContent = speed + 'x';
-      if (speed === currentSpeed) btn.classList.add('ire-active');
+    SPEEDS.forEach(speed=>{
 
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        currentSpeed = speed;
-        safeSetSpeed(video, speed);
-        // Update all active videos
-        document.querySelectorAll('video').forEach(v => {
-          if (activeControllers.has(v)) safeSetSpeed(v, speed);
-        });
-        // Update all speed buttons across all controllers
-        document.querySelectorAll('.ire-speed-btn').forEach(b => {
-          b.classList.toggle('ire-active', b.textContent === speed + 'x');
-        });
-        // Persist to storage
-        chrome.storage.local.set({ [STORAGE_KEY]: speed });
-      });
-      return btn;
+        const btn=document.createElement("button");
+
+        btn.className="ire-speed-btn";
+        btn.textContent=speed+"x";
+
+        btn.addEventListener(
+            "click",
+            (e)=>{
+
+                e.preventDefault();
+                e.stopPropagation();
+
+                const activeVideo=
+                    getActiveVideo();
+
+                if(!activeVideo)
+                    return;
+
+                currentSpeed=speed;
+
+                safeSetSpeed(
+                    activeVideo,
+                    speed
+                );
+
+                updateSpeedButtons(speed);
+
+            }
+        );
+
+        speedRow.appendChild(btn);
+
     });
 
-    speedBtns.forEach(btn => speedRow.appendChild(btn));
+    /* ----- PIP ----- */
+
+    const pipBtn=document.createElement("button");
+
+    pipBtn.className="ire-pip-btn";
+
+    pipBtn.textContent="PiP";
+
+    pipBtn.addEventListener(
+        "click",
+        async(e)=>{
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            try{
+
+                const activeVideo=
+                    getActiveVideo();
+
+                if(!activeVideo)
+                    return;
+
+                if(
+                    document.pictureInPictureElement
+                ){
+
+                    await document
+                    .exitPictureInPicture();
+
+                }else{
+
+                    await activeVideo
+                    .requestPictureInPicture();
+
+                }
+
+            }catch(err){
+
+                console.warn(err);
+
+            }
+
+        }
+    );
+
+    speedRow.appendChild(pipBtn);
 
     controls.appendChild(scrubRow);
     controls.appendChild(speedRow);
-    wrapper.appendChild(controls);
 
-    /* — Live progress update — */
-    function onTimeUpdate() {
-      const dur = video.duration;
-      const cur = video.currentTime;
-      if (!isFinite(dur) || dur === 0) return;
+    /* IMPORTANT:
+       Add to BODY instead of wrapper
+    */
 
-      const pct = (cur / dur) * 100;
-      fill.style.width = pct + '%';
-      thumb.style.left = pct + '%';
-      timeLabel.textContent = formatTime(cur) + ' / ' + formatTime(dur);
+    document.body.appendChild(
+        controls
+    );
+
+    wireScrub(
+        track,
+        fill,
+        thumb,
+        timeLabel
+    );
+}
+
+  /* ─────────────────────────────────────────────────────
+     wireScrub — pointer-based drag & click for seek
+     Uses pointer capture for reliable drag outside element
+  ───────────────────────────────────────────────────── */
+  function wireScrub(track, fill, thumb, timeLabel) {
+
+    let isDragging = false;
+
+    function getCurrentVideo(){
+        return getActiveVideo();
     }
 
-    video.addEventListener('timeupdate', onTimeUpdate);
+    function onTimeUpdate(){
 
-    /* — Scrub interaction — */
-    let isScrubbing = false;
+        if(isDragging) return;
 
-    function scrubTo(e) {
-      const rect = track.getBoundingClientRect();
-      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-      if (isFinite(video.duration) && video.duration > 0) {
-        video.currentTime = ratio * video.duration;
-      }
+        const video=getCurrentVideo();
+
+        if(
+            !video ||
+            !isFinite(video.duration) ||
+            video.duration===0
+        ) return;
+
+        const pct=
+            (video.currentTime/video.duration)*100;
+
+        fill.style.width=pct+'%';
+        thumb.style.left=pct+'%';
+
+        timeLabel.textContent=
+            fmt(video.currentTime)
+            +' / '+
+            fmt(video.duration);
     }
 
-    track.addEventListener('mousedown', (e) => {
-      e.stopPropagation();
-      isScrubbing = true;
-      scrubTo(e);
-    });
+    setInterval(onTimeUpdate,200);
 
-    document.addEventListener('mousemove', (e) => {
-      if (isScrubbing) scrubTo(e);
-    });
+    function getRatio(e){
 
-    document.addEventListener('mouseup', () => {
-      isScrubbing = false;
-    });
+        const rect=
+            track.getBoundingClientRect();
 
-    /* — Re-apply speed on video src change (new reel loaded) — */
-    const srcObserver = new MutationObserver(() => {
-      safeSetSpeed(video, currentSpeed);
-    });
-    srcObserver.observe(video, { attributes: true, attributeFilter: ['src'] });
+        return Math.max(
+            0,
+            Math.min(
+                1,
+                (e.clientX-rect.left)/rect.width
+            )
+        );
+    }
 
+    function doSeek(ratio){
+
+        const video=getCurrentVideo();
+
+        if(
+            !video ||
+            !isFinite(video.duration) ||
+            video.duration===0
+        ) return;
+
+        video.currentTime=
+            ratio*video.duration;
+
+        fill.style.width=
+            (ratio*100)+'%';
+
+        thumb.style.left=
+            (ratio*100)+'%';
+    }
+
+    track.addEventListener(
+        "pointerdown",
+        (e)=>{
+
+            e.preventDefault();
+
+            isDragging=true;
+
+            doSeek(
+                getRatio(e)
+            );
+
+        }
+    );
+
+    track.addEventListener(
+        "pointermove",
+        (e)=>{
+
+            if(!isDragging)
+                return;
+
+            doSeek(
+                getRatio(e)
+            );
+
+        }
+    );
+
+    window.addEventListener(
+        "pointerup",
+        ()=>{
+
+            isDragging=false;
+
+        }
+    );
+}
+
+  /* ─────────────────────────────────────────────────────
+     attachListeners — bind timeupdate to the active video
+     Called whenever the active reel may have changed.
+     Uses WeakSet to avoid duplicate listeners.
+  ───────────────────────────────────────────────────── */
+  function attachListeners(video) {
+    if (!video) return;
+
+    // Apply speed immediately
+    safeSetSpeed(video, currentSpeed);
+
+    if (listenerSet.has(video)) return; // already wired
+    listenerSet.add(video);
+
+    // Find the wrapper that owns this video (if any)
+    const wrapper = video.closest('.' + WRAP_CLASS);
+    if (!wrapper || !wrapper._ireUpdateFn) return;
+
+    video.addEventListener('timeupdate', wrapper._ireUpdateFn);
     video.addEventListener('loadedmetadata', () => {
       safeSetSpeed(video, currentSpeed);
-      onTimeUpdate();
+      wrapper._ireUpdateFn();
     });
 
-    /* — Cleanup helper stored on controller — */
-    return {
-      controls,
-      srcObserver,
-      destroy() {
-        video.removeEventListener('timeupdate', onTimeUpdate);
-        srcObserver.disconnect();
-        controls.remove();
-        // Unwrap if wrapper is empty
-        try {
-          const w = video.parentElement;
-          if (w && w.classList.contains(WRAPPER_CLASS) && w.children.length === 1) {
-            w.parentElement?.insertBefore(video, w);
-            w.remove();
-          }
-        } catch (_) {}
-      }
-    };
+    console.log('[IRE] Listeners attached to video', video);
   }
 
-  /* ── Safely set playback rate ───────────────────────── */
+  /* ─────────────────────────────────────────────────────
+     safeSetSpeed
+  ───────────────────────────────────────────────────── */
   function safeSetSpeed(video, speed) {
+    if (!video) return;
     try {
-      if (video && video.readyState >= 1) {
+      if (video.readyState >= 1) {
         video.playbackRate = speed;
-      } else if (video) {
-        // Wait for metadata then apply
-        video.addEventListener('loadedmetadata', () => {
-          video.playbackRate = speed;
-        }, { once: true });
+      } else {
+        video.addEventListener('loadedmetadata',
+          () => { video.playbackRate = speed; }, { once: true });
       }
     } catch (e) {
-      console.warn('[IRE] setSpeed error', e);
+      console.warn('[IRE] safeSetSpeed error', e);
     }
   }
 
-  /* ── Format seconds to M:SS ─────────────────────────── */
-  function formatTime(secs) {
-    if (!isFinite(secs)) return '0:00';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
+  /* ─────────────────────────────────────────────────────
+     updateSpeedButtons — sync active class across ALL buttons
+  ───────────────────────────────────────────────────── */
+  function updateSpeedButtons(speed) {
+    document.querySelectorAll('.ire-speed-btn').forEach(btn => {
+      btn.classList.toggle('ire-active', parseFloat(btn.dataset.speed) === speed);
+    });
   }
 
-  /* ── MutationObserver: watch for new video elements ─── */
+  /* ─────────────────────────────────────────────────────
+     syncPipButtons — update PiP button style
+  ───────────────────────────────────────────────────── */
+  function syncPipButtons() {
+    const isActive = !!document.pictureInPictureElement;
+    document.querySelectorAll('.ire-pip-btn').forEach(btn => {
+      btn.classList.toggle('ire-pip-active', isActive);
+      btn.title = isActive ? 'Exit Picture-in-Picture' : 'Picture-in-Picture';
+    });
+  }
+
+  /* ─────────────────────────────────────────────────────
+     fmt — seconds → M:SS
+  ───────────────────────────────────────────────────── */
+  function fmt(s) {
+    if (!isFinite(s)) return '0:00';
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60).toString().padStart(2, '0');
+    return `${m}:${sec}`;
+  }
+
+  /* ─────────────────────────────────────────────────────
+     observeDOM — watch for new video elements (SPA / infinite scroll)
+  ───────────────────────────────────────────────────── */
   function observeDOM() {
-    mutationObserver = new MutationObserver((mutations) => {
-      let shouldScan = false;
-      for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
+    domObserver = new MutationObserver((mutations) => {
+      let needsScan = false;
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
           if (node.nodeType !== Node.ELEMENT_NODE) continue;
-          // Quick check: does subtree contain a video?
           if (node.tagName === 'VIDEO' || node.querySelector?.('video')) {
-            shouldScan = true;
+            needsScan = true;
             break;
           }
         }
-        if (shouldScan) break;
+        if (needsScan) break;
       }
-      if (shouldScan) {
-        // Small debounce to let Instagram finish rendering
-        clearTimeout(observeDOM._timer);
-        observeDOM._timer = setTimeout(scanAndEnhance, 150);
+
+      if (needsScan) {
+        clearTimeout(scanTimer);
+        scanTimer = setTimeout(() => {
+          scanAndEnhance();
+          attachListeners(getActiveVideo());
+        }, 200);
       }
     });
 
-    mutationObserver.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
+    domObserver.observe(document.body, { childList: true, subtree: true });
   }
 
-  /* ── SPA navigation detection (Instagram uses history API) */
+  /* ─────────────────────────────────────────────────────
+     observeNavigation — Instagram SPA route changes
+  ───────────────────────────────────────────────────── */
   function observeNavigation() {
-    // Intercept pushState / replaceState
-    const wrap = (fn) => function (...args) {
-      const result = fn.apply(this, args);
-      setTimeout(scanAndEnhance, 400); // wait for new content
-      return result;
+    const patch = (fn) => function (...args) {
+      const r = fn.apply(this, args);
+      setTimeout(() => {
+        scanAndEnhance();
+        attachListeners(getActiveVideo());
+      }, 500);
+      return r;
     };
 
-    history.pushState = wrap(history.pushState);
-    history.replaceState = wrap(history.replaceState);
-
-    window.addEventListener('popstate', () => setTimeout(scanAndEnhance, 400));
+    history.pushState    = patch(history.pushState);
+    history.replaceState = patch(history.replaceState);
+    window.addEventListener('popstate', () => {
+      setTimeout(() => {
+        scanAndEnhance();
+        attachListeners(getActiveVideo());
+      }, 500);
+    });
   }
 
-  /* ── Cleanup on page unload (memory leak prevention) ── */
+  /* ─────────────────────────────────────────────────────
+     Cleanup on unload
+  ───────────────────────────────────────────────────── */
   window.addEventListener('unload', () => {
-    mutationObserver?.disconnect();
-    // Controllers are WeakMap-managed; GC handles the rest
+    domObserver?.disconnect();
+    clearTimeout(scanTimer);
   });
 
 })();
