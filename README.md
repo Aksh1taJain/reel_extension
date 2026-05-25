@@ -32,7 +32,7 @@ Adds a custom progress bar to Instagram reels:
 
 ---
 
-### Full Desktop Mode
+### Full Desktop Mode (not implemented yet)
 
 Optimizes Instagram Reels for larger screens:
 
