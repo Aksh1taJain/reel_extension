@@ -13,12 +13,28 @@
   const CTRL_CLASS  = 'ire-controls';
   const WRAP_CLASS  = 'ire-video-wrapper';
   const STORAGE_KEY = 'ire_speed';
+  const DESKTOP_LAYOUT_CLASS = 'ire-desktop-layout';
+  const DESKTOP_ARTICLE_CLASS = 'ire-desktop-article';
+  const DESKTOP_SPLIT_CLASS = 'ire-desktop-split-container';
+  const DESKTOP_VIDEO_COLUMN_CLASS = 'ire-desktop-video-column';
+  const DESKTOP_SIDE_PANEL_CLASS = 'ire-desktop-side-panel';
+  const DESKTOP_OVERFLOW_CAPTION_CLASS = 'ire-desktop-overflow-caption';
+  const NATIVE_CONTROL_CLASS = 'ire-native-reel-control';
+  const NATIVE_PREV_CLASS = 'ire-native-reel-prev';
+  const NATIVE_NEXT_CLASS = 'ire-native-reel-next';
+  const NATIVE_CLOSE_CLASS = 'ire-native-reel-close';
+  const NATIVE_AUDIO_CLASS = 'ire-native-reel-audio';
+  const NATIVE_AUDIO_PARENT_CLASS = 'ire-native-reel-audio-parent';
 
   let currentSpeed   = 1;
   const enhancedSet  = new WeakSet();   // videos already wrapped
   const listenerSet  = new WeakSet();   // videos already have timeupdate/speed listeners
   let domObserver    = null;
   let scanTimer      = null;
+  let layoutTimer    = null;
+  const desktopLayoutElements = new Set();
+  const nativeControlElements = new Set();
+  const nativeAudioParentElements = new Set();
 
   /* ─────────────────────────────────────────────────────
      Boot: restore saved speed then initialise
@@ -62,7 +78,7 @@
       }
     }
 
-    if (best) console.log('[IRE] Video found:', best, `visibility=${(bestRatio*100).toFixed(1)}%`);
+    // if (best) console.log('[IRE] Video found:', best, `visibility=${(bestRatio*100).toFixed(1)}%`);
     return best;
   }
 
@@ -71,8 +87,10 @@
   ───────────────────────────────────────────────────── */
   function init() {
     scanAndEnhance();
+    applyDesktopLayout();
     observeDOM();
     observeNavigation();
+    window.addEventListener('resize', scheduleDesktopLayout);
     // PiP state sync (user may close PiP window externally)
     document.addEventListener('leavepictureinpicture', syncPipButtons);
   }
@@ -84,6 +102,7 @@
     document.querySelectorAll('video').forEach(tryEnhance);
     // After wrapping, attach playback listeners to the active video
     attachListeners(getActiveVideo());
+    scheduleDesktopLayout();
   }
 
   /* ─────────────────────────────────────────────────────
@@ -125,6 +144,354 @@
       console.warn('[IRE] ensureWrapper error', e);
       return null;
     }
+  }
+
+  function scheduleDesktopLayout() {
+    clearTimeout(layoutTimer);
+    layoutTimer = setTimeout(applyDesktopLayout, 100);
+  }
+
+  /* Apply desktop-only Reels layout classes.
+     The CSS does the resizing; JS only identifies Instagram's current
+     video/comment structure so normal pages and mobile layouts stay untouched. */
+  function applyDesktopLayout() {
+    clearDesktopLayout();
+
+    // Full Desktop Mode only runs on direct Reels routes and desktop widths.
+    if (!isReelViewerPath() || window.innerWidth < 1024) return;
+
+    const video = getActiveVideo();
+    if (!video || !video.closest('article')) return;
+
+    const article = video.closest('article');
+    const splitContainer = findSplitContainer(article, video);
+    const videoColumn = splitContainer
+      ? Array.from(splitContainer.children).find(child => child.contains(video))
+      : null;
+
+    // Avoid half-applying layout if Instagram renders a different structure.
+    if (!splitContainer || !videoColumn) return;
+
+    document.documentElement.classList.add(DESKTOP_LAYOUT_CLASS);
+    desktopLayoutElements.add(document.documentElement);
+
+    article.classList.add(DESKTOP_ARTICLE_CLASS);
+    desktopLayoutElements.add(article);
+
+    if (splitContainer) {
+      splitContainer.classList.add(DESKTOP_SPLIT_CLASS);
+      desktopLayoutElements.add(splitContainer);
+    }
+
+    if (videoColumn) {
+      videoColumn.classList.add(DESKTOP_VIDEO_COLUMN_CLASS);
+      desktopLayoutElements.add(videoColumn);
+    }
+
+    Array.from(splitContainer.children).forEach(child => {
+      if (child !== videoColumn) {
+        child.classList.add(DESKTOP_SIDE_PANEL_CLASS);
+        desktopLayoutElements.add(child);
+      }
+    });
+
+    const sidePanel = splitContainer.querySelector(`.${DESKTOP_SIDE_PANEL_CLASS}`);
+    const sideRect = sidePanel?.getBoundingClientRect();
+    if (sideRect) {
+      document.documentElement.style.setProperty('--ire-side-width', `${Math.round(sideRect.width)}px`);
+    }
+
+    // Some long captions are positioned before layout settles, so re-check after paint.
+    markOverflowingCaptions();
+    requestAnimationFrame(markOverflowingCaptions);
+    setTimeout(markOverflowingCaptions, 250);
+    markNativeReelControls(videoColumn);
+  }
+
+  /* Remove all desktop-mode marker classes before re-detecting.
+     Instagram is a SPA, so stale classes can otherwise leak between reels/routes. */
+  function clearDesktopLayout() {
+    desktopLayoutElements.forEach(element => {
+      element.classList.remove(
+        DESKTOP_LAYOUT_CLASS,
+        DESKTOP_ARTICLE_CLASS,
+        DESKTOP_SPLIT_CLASS,
+        DESKTOP_VIDEO_COLUMN_CLASS,
+        DESKTOP_SIDE_PANEL_CLASS,
+        DESKTOP_OVERFLOW_CAPTION_CLASS
+      );
+    });
+    desktopLayoutElements.clear();
+    clearNativeReelControls();
+  }
+
+  /* Mark Instagram's own Reels controls so CSS can keep them visible.
+     No custom navigation/audio buttons are created; native controls remain clickable. */
+  function markNativeReelControls(videoColumn) {
+    clearNativeReelControls();
+
+    // Expose video geometry to CSS for positioning controls relative to the video area.
+    const rect = videoColumn?.getBoundingClientRect();
+    if (rect) {
+      document.documentElement.style.setProperty('--ire-video-left', `${Math.round(rect.left)}px`);
+      document.documentElement.style.setProperty('--ire-video-right', `${Math.round(window.innerWidth - rect.right)}px`);
+      document.documentElement.style.setProperty('--ire-video-width', `${Math.round(rect.width)}px`);
+    }
+
+    document.querySelectorAll('button, [role="button"]').forEach(control => {
+      const audioIcon = control.querySelector('svg[aria-label*="Audio"], svg title');
+      const label = [
+        control.getAttribute('aria-label'),
+        audioIcon?.getAttribute?.('aria-label'),
+        audioIcon?.textContent,
+        control.textContent
+      ].filter(Boolean).join(' ').trim().toLowerCase();
+      const rect = control.getBoundingClientRect();
+
+      if (label.includes('previous') || isLeftEdgeControl(rect)) {
+        markNativeReelControl(control, NATIVE_PREV_CLASS);
+      } else if (label.includes('next')) {
+        markNativeReelControl(control, NATIVE_NEXT_CLASS);
+      } else if (label.includes('close')) {
+        markNativeReelControl(control, NATIVE_CLOSE_CLASS);
+      } else if (label.includes('audio') || label.includes('mute') || isVideoAudioControl(rect)) {
+        markNativeReelControl(control, NATIVE_AUDIO_CLASS);
+      }
+    });
+
+    const nativeAudio = findNativeAudioControl();
+    if (nativeAudio) {
+      markNativeReelControl(nativeAudio, NATIVE_AUDIO_CLASS);
+    }
+
+    adjustNativeAudioControl();
+    requestAnimationFrame(adjustNativeAudioControl);
+    setTimeout(adjustNativeAudioControl, 250);
+  }
+
+  // Instagram's left arrow may not always expose a stable text label.
+  function isLeftEdgeControl(rect) {
+    return (
+      rect.width >= 24 &&
+      rect.width <= 56 &&
+      rect.height >= 24 &&
+      rect.height <= 56 &&
+      rect.left >= 0 &&
+      rect.left <= 80 &&
+      rect.top > window.innerHeight * 0.25 &&
+      rect.bottom < window.innerHeight * 0.85
+    );
+  }
+
+  // Audio controls are usually near the lower-right edge of the video.
+  function isVideoAudioControl(rect) {
+    const videoLeft = parseFloat(document.documentElement.style.getPropertyValue('--ire-video-left')) || 0;
+    const videoWidth = parseFloat(document.documentElement.style.getPropertyValue('--ire-video-width')) || 0;
+    const videoRight = videoLeft + videoWidth;
+
+    return (
+      videoWidth > 0 &&
+      rect.width >= 20 &&
+      rect.width <= 44 &&
+      rect.height >= 20 &&
+      rect.height <= 44 &&
+      rect.left > videoRight - 90 &&
+      rect.right <= videoRight + 20 &&
+      rect.top > window.innerHeight - 100
+    );
+  }
+
+  // Prefer semantic audio labels/icons when Instagram exposes them.
+  function findNativeAudioControl() {
+    const video = getActiveVideo();
+    const player = video?.closest('[role="group"][aria-label="Video player"]');
+    const scope = player || document;
+    const candidates = Array.from(scope.querySelectorAll('[role="button"], button'))
+      .filter(control => {
+        const audioIcon = control.querySelector('svg[aria-label*="Audio"], svg title');
+        return /audio|mute|volume/i.test([
+          control.getAttribute('aria-label'),
+          audioIcon?.getAttribute?.('aria-label'),
+          audioIcon?.textContent,
+          control.textContent
+        ].filter(Boolean).join(' '));
+      });
+
+    if (!candidates.length) return null;
+
+    return candidates
+      .map(control => ({ control, rect: control.getBoundingClientRect() }))
+      .filter(({ rect }) => (
+        rect.width >= 20 &&
+        rect.width <= 48 &&
+        rect.height >= 20 &&
+        rect.height <= 48
+      ))
+      .sort((a, b) => {
+        const aScore = a.rect.right + a.rect.bottom;
+        const bScore = b.rect.right + b.rect.bottom;
+        return bScore - aScore;
+      })[0]?.control || null;
+  }
+
+  function markNativeReelControl(control, extraClass) {
+    control.classList.add(NATIVE_CONTROL_CLASS, extraClass);
+    nativeControlElements.add(control);
+
+    if (extraClass === NATIVE_AUDIO_CLASS) {
+      markNativeAudioParents(control);
+    }
+  }
+
+  function clearNativeReelControls() {
+    nativeControlElements.forEach(control => {
+      control.classList.remove(
+        NATIVE_CONTROL_CLASS,
+        NATIVE_PREV_CLASS,
+        NATIVE_NEXT_CLASS,
+        NATIVE_CLOSE_CLASS,
+        NATIVE_AUDIO_CLASS
+      );
+      control.style.removeProperty('--ire-audio-offset-x');
+      control.style.removeProperty('--ire-audio-offset-y');
+    });
+    nativeControlElements.clear();
+
+    nativeAudioParentElements.forEach(element => {
+      element.classList.remove(NATIVE_AUDIO_PARENT_CLASS);
+    });
+    nativeAudioParentElements.clear();
+
+    document.documentElement.style.removeProperty('--ire-video-left');
+    document.documentElement.style.removeProperty('--ire-video-right');
+    document.documentElement.style.removeProperty('--ire-video-width');
+    document.documentElement.style.removeProperty('--ire-side-width');
+  }
+
+  // Raising parent stacking contexts keeps the native audio icon visible without reparenting it.
+  function markNativeAudioParents(control) {
+    const videoColumn = document.querySelector(`.${DESKTOP_VIDEO_COLUMN_CLASS}`);
+    let element = control.parentElement;
+
+    while (element && element !== document.body) {
+      element.classList.add(NATIVE_AUDIO_PARENT_CLASS);
+      nativeAudioParentElements.add(element);
+
+      if (element === videoColumn) break;
+      element = element.parentElement;
+    }
+  }
+
+  // Move the native audio button into view with a measured transform, not DOM movement.
+  function adjustNativeAudioControl() {
+    const audioControl = document.querySelector(`.${NATIVE_AUDIO_CLASS}`);
+    const videoColumn = document.querySelector(`.${DESKTOP_VIDEO_COLUMN_CLASS}`);
+    if (!audioControl || !videoColumn) return;
+
+    audioControl.style.setProperty('--ire-audio-offset-x', '0px');
+    audioControl.style.setProperty('--ire-audio-offset-y', '0px');
+
+    const controlRect = audioControl.getBoundingClientRect();
+    const videoRect = videoColumn.getBoundingClientRect();
+
+    if (!controlRect.width || !controlRect.height || !videoRect.width || !videoRect.height) return;
+
+    const targetLeft = Math.min(
+      videoRect.right - controlRect.width - 24,
+      window.innerWidth - controlRect.width - 16
+    );
+    const targetTop = Math.min(
+      videoRect.bottom - controlRect.height - 24,
+      window.innerHeight - controlRect.height - 16
+    );
+
+    audioControl.style.setProperty('--ire-audio-offset-x', `${Math.round(targetLeft - controlRect.left)}px`);
+    audioControl.style.setProperty('--ire-audio-offset-y', `${Math.round(targetTop - controlRect.top)}px`);
+  }
+
+  /* Detect long caption blocks that Instagram positions across the viewport.
+     Marking only confirmed overflowers avoids breaking normal comments. */
+  function markOverflowingCaptions() {
+    const minOverflowWidth = Math.max(700, window.innerWidth * 0.45);
+    const candidates = document.querySelectorAll('._a9zr, ._a9zs, h1, [class*="_a9z"], [class*="_aad"]');
+
+    candidates.forEach(element => {
+      const rect = element.getBoundingClientRect();
+      const text = (element.textContent || '').trim();
+
+      if (
+        text.length > 80 &&
+        rect.width > minOverflowWidth &&
+        rect.left < window.innerWidth * 0.2 &&
+        rect.right > window.innerWidth * 0.7
+      ) {
+        element.classList.add(DESKTOP_OVERFLOW_CAPTION_CLASS);
+        desktopLayoutElements.add(element);
+
+        const captionContainer = element.closest('._a9zr, ._a9zs, [class*="_a9z"]');
+        if (captionContainer) {
+          captionContainer.classList.add(DESKTOP_OVERFLOW_CAPTION_CLASS);
+          desktopLayoutElements.add(captionContainer);
+        }
+      }
+    });
+  }
+
+  // Scope desktop mode to Reels pages only.
+  function isReelViewerPath() {
+    const [firstSegment] = window.location.pathname.split('/').filter(Boolean);
+    return firstSegment === 'reel' || firstSegment === 'reels';
+  }
+
+  /* Find the flex row that contains the video column and comment panel.
+     Uses structure and dimensions instead of relying on Instagram's generated classes. */
+  function findSplitContainer(article, video) {
+    let node = video.parentElement;
+
+    while (node && node !== article) {
+      const parent = node.parentElement;
+
+      if (parent && parent !== article && parent.children.length >= 2) {
+        const children = Array.from(parent.children);
+        const videoChild = children.find(child => child.contains(video));
+        const sideChild = children.find(child => (
+          child !== videoChild &&
+          isLikelyCommentPanel(child)
+        ));
+
+        if (videoChild && sideChild) {
+          const parentStyle = getComputedStyle(parent);
+          const parentRect = parent.getBoundingClientRect();
+          const videoRect = videoChild.getBoundingClientRect();
+          const sideRect = sideChild.getBoundingClientRect();
+
+          if (
+            parentStyle.display.includes('flex') &&
+            parentStyle.flexDirection === 'row' &&
+            parentRect.width > video.offsetWidth + 200 &&
+            videoRect.width >= 300 &&
+            videoRect.height >= window.innerHeight * 0.6 &&
+            sideRect.width >= 260
+          ) {
+            return parent;
+          }
+        }
+      }
+
+      node = parent;
+    }
+
+    return null;
+  }
+
+  // Comment panel detection keeps layout changes scoped to the active Reel viewer.
+  function isLikelyCommentPanel(element) {
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 260 || rect.height < window.innerHeight * 0.5) return false;
+    if (element.querySelector('video')) return false;
+
+    const text = element.textContent || '';
+    return /reply|comment|liked by|likes|follow|translation|original audio/i.test(text);
   }
 
   /* ─────────────────────────────────────────────────────
@@ -483,6 +850,7 @@
         scanTimer = setTimeout(() => {
           scanAndEnhance();
           attachListeners(getActiveVideo());
+          scheduleDesktopLayout();
         }, 200);
       }
     });
@@ -496,9 +864,11 @@
   function observeNavigation() {
     const patch = (fn) => function (...args) {
       const r = fn.apply(this, args);
+      clearDesktopLayout();
       setTimeout(() => {
         scanAndEnhance();
         attachListeners(getActiveVideo());
+        scheduleDesktopLayout();
       }, 500);
       return r;
     };
@@ -506,9 +876,11 @@
     history.pushState    = patch(history.pushState);
     history.replaceState = patch(history.replaceState);
     window.addEventListener('popstate', () => {
+      clearDesktopLayout();
       setTimeout(() => {
         scanAndEnhance();
         attachListeners(getActiveVideo());
+        scheduleDesktopLayout();
       }, 500);
     });
   }
@@ -519,6 +891,9 @@
   window.addEventListener('unload', () => {
     domObserver?.disconnect();
     clearTimeout(scanTimer);
+    clearTimeout(layoutTimer);
+    clearDesktopLayout();
+    window.removeEventListener('resize', scheduleDesktopLayout);
   });
 
 })();

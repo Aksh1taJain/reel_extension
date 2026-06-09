@@ -233,3 +233,245 @@
 .ire-scrub-track {
     z-index:99999999 !important;
 }
+
+/* === Full Desktop Mode === */
+html.ire-desktop-layout .ire-desktop-article,
+html.ire-desktop-layout .ire-desktop-split-container {
+  pointer-events: auto !important;
+  width: 100% !important;
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+  max-width: none !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  overflow: visible !important;
+  background-color: #000 !important;
+}
+
+html.ire-desktop-layout .ire-desktop-article {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: auto !important;
+}
+
+html.ire-desktop-layout .ire-desktop-split-container {
+  align-items: stretch !important;
+}
+
+/* Fixed-width comment panel so the enlarged video gets remaining space. */
+html.ire-desktop-layout .ire-desktop-side-panel {
+  flex: 0 0 clamp(360px, 22vw, 500px) !important;
+  max-width: clamp(360px, 22vw, 500px) !important;
+  min-width: 0 !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  position: relative !important;
+  box-sizing: border-box !important;
+  background-color: rgb(38, 40, 44) !important;
+}
+
+/* Keep long captions inside the comment panel instead of spilling over the video. */
+html.ire-desktop-layout .ire-desktop-side-panel ._a9zr,
+html.ire-desktop-layout .ire-desktop-side-panel ._a9zs,
+html.ire-desktop-layout .ire-desktop-side-panel h1 {
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  overflow-wrap: anywhere !important;
+  white-space: normal !important;
+}
+
+/* Runtime-marked caption blocks that Instagram positioned across the viewport. */
+html.ire-desktop-layout .ire-desktop-overflow-caption {
+  position: relative !important;
+  inset: auto !important;
+  left: auto !important;
+  right: auto !important;
+  transform: none !important;
+  width: var(--ire-side-width, 420px) !important;
+  max-width: var(--ire-side-width, 420px) !important;
+  min-width: 0 !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+  flex: 0 1 auto !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+/* Ensure nested text inside marked captions wraps within the bounded panel. */
+html.ire-desktop-layout .ire-desktop-overflow-caption * {
+  max-width: 100% !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+}
+
+/* Flexible video column: fills available desktop space without cropping video. */
+html.ire-desktop-layout .ire-desktop-video-column {
+  max-width: none !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  width: 100% !important;
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  overflow: visible !important;
+  background-color: #000 !important;
+}
+
+html.ire-desktop-layout .ire-desktop-video-column > div:first-child {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 100% !important;
+}
+
+html.ire-desktop-layout .ire-desktop-video-column .ire-video-wrapper {
+  width: 100% !important;
+  height: 100dvh !important;
+  max-width: 100% !important;
+  max-height: 100dvh !important;
+  aspect-ratio: auto !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  overflow: visible !important;
+  background-color: #000 !important;
+}
+
+html.ire-desktop-layout .ire-desktop-video-column .ire-video-wrapper > video {
+  width: auto !important;
+  height: 100dvh !important;
+  max-width: 100% !important;
+  max-height: 100dvh !important;
+  object-fit: contain !important;
+  display: block !important;
+}
+
+/* Native Instagram controls stay above the resized layout. */
+html.ire-desktop-layout .ire-native-reel-control {
+  z-index: 2147483646 !important;
+  pointer-events: auto !important;
+}
+
+/* Restore Instagram's white circular previous/next buttons on desktop mode. */
+html.ire-desktop-layout .ire-native-reel-prev,
+html.ire-desktop-layout .ire-native-reel-next {
+  width: 34px !important;
+  height: 34px !important;
+  border-radius: 50% !important;
+  background: rgba(255,255,255,0.96) !important;
+  color: #111 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.35) !important;
+}
+
+html.ire-desktop-layout .ire-native-reel-prev svg,
+html.ire-desktop-layout .ire-native-reel-next svg {
+  color: #111 !important;
+  fill: #111 !important;
+  stroke: #111 !important;
+}
+
+html.ire-desktop-layout .ire-native-reel-prev,
+html.ire-desktop-layout .ire-native-reel-next,
+html.ire-desktop-layout .ire-native-reel-close {
+  position: fixed !important;
+}
+
+/* Native audio button is translated into view while staying in Instagram's DOM. */
+html.ire-desktop-layout .ire-native-reel-audio {
+  position: relative !important;
+  left: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  top: auto !important;
+  transform: translate(var(--ire-audio-offset-x, 0px), var(--ire-audio-offset-y, 0px)) !important;
+  width: 34px !important;
+  height: 34px !important;
+  min-width: 34px !important;
+  min-height: 34px !important;
+  max-width: 34px !important;
+  max-height: 34px !important;
+  border-radius: 50% !important;
+  background: rgba(0,0,0,0.55) !important;
+  color: #fff !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  z-index: 2147483646 !important;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.35) !important;
+}
+
+/* Keep transformed/clipped ancestors from hiding the native audio button. */
+html.ire-desktop-layout .ire-native-reel-audio-parent {
+  overflow: visible !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  z-index: 2147483645 !important;
+}
+
+html.ire-desktop-layout .ire-native-reel-audio svg {
+  color: #fff !important;
+  fill: #fff !important;
+  width: 16px !important;
+  height: 16px !important;
+}
+
+html.ire-desktop-layout .ire-native-reel-audio,
+html.ire-desktop-layout .ire-native-reel-audio * {
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+html.ire-desktop-layout .ire-native-reel-prev {
+  left: 16px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+}
+
+html.ire-desktop-layout .ire-native-reel-next {
+  right: 16px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+}
+
+html.ire-desktop-layout .ire-native-reel-close {
+  right: 16px !important;
+  top: 16px !important;
+}
+
+@supports not (height: 100dvh) {
+  html.ire-desktop-layout .ire-desktop-article,
+  html.ire-desktop-layout .ire-desktop-split-container,
+  html.ire-desktop-layout .ire-desktop-side-panel,
+  html.ire-desktop-layout .ire-desktop-video-column,
+  html.ire-desktop-layout .ire-desktop-video-column .ire-video-wrapper {
+    height: 100vh !important;
+    min-height: 100vh !important;
+  }
+
+  html.ire-desktop-layout .ire-desktop-video-column .ire-video-wrapper > video {
+    height: 100vh !important;
+    max-height: 100vh !important;
+  }
+}
+
+@media (max-width: 1180px) {
+  html.ire-desktop-layout .ire-desktop-side-panel {
+    flex-basis: 340px !important;
+    max-width: 340px !important;
+  }
+}

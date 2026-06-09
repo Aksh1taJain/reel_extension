@@ -32,7 +32,7 @@ Adds a custom progress bar to Instagram reels:
 
 ---
 
-### Full Desktop Mode (not implemented yet)
+### Full Desktop Mode
 
 Optimizes Instagram Reels for larger screens:
 
@@ -41,6 +41,15 @@ Optimizes Instagram Reels for larger screens:
 - Reduces unnecessary spacing
 - Maintains video aspect ratio
 - Responsive layout
+- Keeps Instagram navigation, close, and audio controls usable
+
+Full Desktop Mode runs automatically on desktop-width Reels pages and does not require a separate toggle.
+
+---
+
+### Picture-in-Picture
+
+Adds a PiP button for supported reels so videos can be watched in a floating player.
 
 ---
 
@@ -87,13 +96,16 @@ Instagram-Reel-Enhancer/
 - Injects playback controls
 - Handles speed changes
 - Creates seek functionality
+- Applies Full Desktop Mode on Reels pages
+- Preserves native Instagram reel controls
 - Observes DOM and navigation changes
 
 **content.css**
 - Styles for controls and overlays
 - Speed buttons
 - Progress bar
-- Full-screen layout adjustments
+- Full Desktop Mode layout adjustments
+- Native control visibility fixes
 
 ---
 
@@ -130,6 +142,7 @@ The extension automatically adds:
 - Playback speed controls
 - Seek bar
 - Larger viewing mode
+- Picture-in-picture button
 
 No additional setup required.
 
@@ -140,6 +153,7 @@ No additional setup required.
 - Works on desktop Instagram web
 - Built for Chrome (Manifest V3)
 - Designed for dynamically loaded reels
+- Full Desktop Mode is enabled automatically on desktop-width Reels pages
 - Uses lightweight DOM updates to avoid performance issues
 
 ---
@@ -147,7 +161,6 @@ No additional setup required.
 ## Future Improvements
 
 - Keyboard shortcuts
-- Picture-in-picture controls
 - Custom speed presets
 - Volume boost
 - Theme customization
